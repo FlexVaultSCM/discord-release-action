@@ -10,6 +10,7 @@
  * - Parsing docs/reference/releases.md (--file)
  * - Reading directly from GitHub Releases (--from-gh-release [<tag>])
  * - Custom input via arguments (--tag, --title, --body, --body-file, --url)
+ * - Automatic cleaning of commit hashes and PR links
  */
 
 const fs = require('fs');
@@ -35,6 +36,7 @@ function parseArgs() {
     productName: 'FlexVault',
     destinationChannel: '#releases',
     fromGhRelease: false,
+    cleanLinks: true,
     dryRun: false
   };
 
@@ -65,6 +67,8 @@ function parseArgs() {
       if (takesValue(i)) {
         options.tag = args[++i];
       }
+    } else if (arg === '--no-clean-links') {
+      options.cleanLinks = false;
     } else if (arg === '--dry-run') {
       options.dryRun = true;
     }
@@ -154,6 +158,20 @@ function fetchGitHubRelease(targetTag) {
   }
 }
 
+function cleanReleaseBody(body) {
+  if (!body) return '';
+  return body
+    // Remove PR links: ([#123](https://...)) or ([#123])
+    .replace(/\s*\(\[#\d+\](?:\([^)]+\))?\)/g, '')
+    // Remove commit hash links: ([a-f0-9]{7,40}](https://...)) or ([a-f0-9]{7,40})
+    .replace(/\s*\(\[?[a-f0-9]{7,40}\]?(?:\([^)]+\))?\)/gi, '')
+    // Remove redundant compare header if present at start: ## [1.2.3](https://...) (2026-xx-xx)
+    .replace(/^##\s+\[?[0-9.]+\]?(?:\([^)]+\))?(?:\s*\([^)]*\))?\r?\n+/m, '')
+    // Clean up trailing whitespace on lines
+    .replace(/[ \t]+$/gm, '')
+    .trim();
+}
+
 function getFeedbackChannelMention() {
   const channelId = process.env.DISCORD_FEEDBACK_CHANNEL_ID;
   if (channelId === '' || channelId === 'none' || channelId === 'false') {
@@ -164,6 +182,14 @@ function getFeedbackChannelMention() {
     return `<#${id.trim()}>`;
   }
   return id.startsWith('#') ? `\`${id}\`` : `<#${id}>`;
+}
+
+function formatDestinationChannel(channel) {
+  if (!channel) return '`#releases`';
+  if (/^\d+$/.test(channel.trim())) {
+    return `<#${channel.trim()}>`;
+  }
+  return channel.startsWith('#') || channel.startsWith('<#') ? channel : `\`${channel}\``;
 }
 
 function splitIntoChunks(header, body, footer, maxLen = 1750) {
@@ -252,8 +278,10 @@ function makeCopyBlock(renderedPost, destinationChannel) {
   const maxTicks = backtickMatches ? Math.max(...backtickMatches.map(m => m.length)) : 0;
   const fence = '`'.repeat(Math.max(4, maxTicks + 1));
 
+  const targetDisplay = formatDestinationChannel(destinationChannel);
+
   return [
-    `📋 **Click the copy icon in the top-right of this box, then paste & edit in ${destinationChannel}:**`,
+    `📋 **Click the copy icon in the top-right of this box, then paste & edit in ${targetDisplay}:**`,
     `${fence}markdown`,
     renderedPost,
     `${fence}`,
@@ -323,6 +351,10 @@ async function main() {
     if (fs.existsSync(options.bodyFile)) {
       releaseBody = options.body || fs.readFileSync(options.bodyFile, 'utf8').trim();
     }
+  }
+
+  if (options.cleanLinks) {
+    releaseBody = cleanReleaseBody(releaseBody);
   }
 
   if (!releaseTitle) {

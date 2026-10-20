@@ -48,13 +48,17 @@ inputs:
     required: false
     default: 'FlexVault'
   destination-channel:
-    description: 'Target channel name displayed in copy instructions'
+    description: 'Target channel name or ID displayed in copy instructions'
     required: false
     default: '#releases'
   feedback-channel-id:
     description: 'Discord channel ID for questions/feedback'
     required: false
     default: '1547328671335846068'
+  clean-links:
+    description: 'Strip commit hashes and PR links from changelog notes for cleaner announcements (default: true)'
+    required: false
+    default: 'true'
   dry-run:
     description: 'If true, prints draft output to logs without sending to Discord'
     required: false
@@ -81,12 +85,17 @@ runs:
         INPUT_DOCS_URL: ${{ inputs.docs-url }}
         INPUT_PRODUCT_NAME: ${{ inputs.product-name }}
         INPUT_DESTINATION_CHANNEL: ${{ inputs.destination-channel }}
+        INPUT_CLEAN_LINKS: ${{ inputs.clean-links }}
         INPUT_DRY_RUN: ${{ inputs.dry-run }}
       run: |
         ARGS=()
 
         if [ "$INPUT_DRY_RUN" = "true" ]; then
           ARGS+=(--dry-run)
+        fi
+
+        if [ "$INPUT_CLEAN_LINKS" = "false" ]; then
+          ARGS+=(--no-clean-links)
         fi
 
         if [ -n "$INPUT_FILE" ]; then
