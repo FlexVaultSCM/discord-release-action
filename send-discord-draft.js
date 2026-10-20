@@ -14,7 +14,13 @@
 
 const fs = require('fs');
 const path = require('path');
-const { execSync } = require('child_process');
+const { execFileSync } = require('child_process');
+
+if (typeof fetch !== 'function') {
+  console.error(`\n❌ Error: Node.js 18+ is required for native fetch support (detected: ${process.version}).`);
+  console.error(`Please configure your workflow to run on Node 18 or 20+ via actions/setup-node@v4.`);
+  process.exit(1);
+}
 
 function parseArgs() {
   const args = process.argv.slice(2);
@@ -32,29 +38,31 @@ function parseArgs() {
     dryRun: false
   };
 
+  const takesValue = (idx) => idx + 1 < args.length && !args[idx + 1].startsWith('--');
+
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
-    if (arg === '--file' && i + 1 < args.length) {
+    if (arg === '--file' && takesValue(i)) {
       options.file = args[++i];
-    } else if (arg === '--tag' && i + 1 < args.length) {
+    } else if (arg === '--tag' && takesValue(i)) {
       options.tag = args[++i];
-    } else if (arg === '--title' && i + 1 < args.length) {
+    } else if (arg === '--title' && takesValue(i)) {
       options.title = args[++i];
-    } else if (arg === '--body' && i + 1 < args.length) {
+    } else if (arg === '--body' && takesValue(i)) {
       options.body = args[++i];
-    } else if (arg === '--body-file' && i + 1 < args.length) {
+    } else if (arg === '--body-file' && takesValue(i)) {
       options.bodyFile = args[++i];
-    } else if (arg === '--url' && i + 1 < args.length) {
+    } else if (arg === '--url' && takesValue(i)) {
       options.url = args[++i];
-    } else if (arg === '--docs-url' && i + 1 < args.length) {
+    } else if (arg === '--docs-url' && takesValue(i)) {
       options.docsUrl = args[++i];
-    } else if (arg === '--product-name' && i + 1 < args.length) {
+    } else if (arg === '--product-name' && takesValue(i)) {
       options.productName = args[++i];
-    } else if (arg === '--destination-channel' && i + 1 < args.length) {
+    } else if (arg === '--destination-channel' && takesValue(i)) {
       options.destinationChannel = args[++i];
     } else if (arg === '--from-gh-release') {
       options.fromGhRelease = true;
-      if (i + 1 < args.length && !args[i + 1].startsWith('--')) {
+      if (takesValue(i)) {
         options.tag = args[++i];
       }
     } else if (arg === '--dry-run') {
@@ -71,7 +79,7 @@ function parseReleasesDoc(filePath, targetTag) {
   }
   const content = fs.readFileSync(filePath, 'utf8');
 
-  // Split into sections starting with "## "
+  // Split only on top-level release headers (starting with "## ")
   const sections = content.split(/\r?\n(?=##\s+)/);
   const releaseSections = sections.filter(s => s.trim().startsWith('## '));
 
@@ -82,9 +90,10 @@ function parseReleasesDoc(filePath, targetTag) {
   let selectedSection = releaseSections[0];
   if (targetTag) {
     const cleanTag = targetTag.replace(/^v/, '');
+    const tagRegex = new RegExp(`\\b${cleanTag.replace(/\./g, '\\.')}\\b`);
     const found = releaseSections.find(s => {
       const firstLine = s.split(/\r?\n/)[0];
-      return firstLine.includes(targetTag) || firstLine.includes(cleanTag);
+      return tagRegex.test(firstLine);
     });
     if (!found) {
       throw new Error(`Target tag '${targetTag}' was not found in ${filePath}`);
@@ -94,17 +103,17 @@ function parseReleasesDoc(filePath, targetTag) {
 
   const lines = selectedSection.split(/\r?\n/);
   // Remove markdown anchor like {: #v0-11-2 } from header
-  const rawHeader = lines[0].replace(/^##\s+/, '').replace(/\{:\s*#[^\}]+\}/g, '').trim();
+  const rawHeader = lines[0].replace(/^##\s+/, '').replace(/\{:\s*#[^}]+\}/g, '').trim();
 
   // Extract anchor if present to link directly to section
-  const anchorMatch = lines[0].match(/\{:\s*#([^\}]+)\}/);
+  const anchorMatch = lines[0].match(/\{:\s*#([^}]+)\}/);
   const anchor = anchorMatch ? anchorMatch[1].trim() : '';
 
   // Extract body and strip anchors throughout
   const rawBody = lines
     .slice(1)
     .join('\n')
-    .replace(/\{:\s*#[^\}]+\}/g, '')
+    .replace(/\{:\s*#[^}]+\}/g, '')
     .trim();
 
   // Extract version tag
@@ -120,27 +129,41 @@ function parseReleasesDoc(filePath, targetTag) {
 }
 
 function fetchGitHubRelease(targetTag) {
-  const repoFlag = process.env.GITHUB_REPOSITORY ? `--repo "${process.env.GITHUB_REPOSITORY}"` : '';
-  const tagArg = targetTag ? `"${targetTag}"` : '';
-  const cmd = `gh release view ${tagArg} --json tagName,name,body,url ${repoFlag}`.trim();
-  console.log(`Executing: ${cmd}`);
-  const stdout = execSync(cmd, { encoding: 'utf8' });
-  const data = JSON.parse(stdout);
+  const args = ['release', 'view'];
+  if (targetTag && targetTag.trim()) {
+    args.push(targetTag.trim());
+  }
+  args.push('--json', 'tagName,name,body,url');
 
-  return {
-    tag: data.tagName || targetTag,
-    title: data.name || data.tagName,
-    body: data.body || '',
-    url: data.url || ''
-  };
+  if (process.env.GITHUB_REPOSITORY) {
+    args.push('--repo', process.env.GITHUB_REPOSITORY);
+  }
+
+  console.log(`Executing: gh ${args.join(' ')}`);
+  try {
+    const stdout = execFileSync('gh', args, { encoding: 'utf8' });
+    const data = JSON.parse(stdout);
+    return {
+      tag: data.tagName || targetTag,
+      title: data.name || data.tagName,
+      body: data.body || '',
+      url: data.url || ''
+    };
+  } catch (err) {
+    throw new Error(`Failed to fetch release via gh CLI: ${err.message}`);
+  }
 }
 
 function getFeedbackChannelMention() {
-  const channelId = process.env.DISCORD_FEEDBACK_CHANNEL_ID || '1547328671335846068';
-  if (channelId && channelId.trim()) {
-    return `<#${channelId.trim()}>`;
+  const channelId = process.env.DISCORD_FEEDBACK_CHANNEL_ID;
+  if (channelId === '' || channelId === 'none' || channelId === 'false') {
+    return '`#feedback-and-bugs`';
   }
-  return '`#feedback-and-bugs`';
+  const id = channelId || '1547328671335846068';
+  if (/^\d+$/.test(id.trim())) {
+    return `<#${id.trim()}>`;
+  }
+  return id.startsWith('#') ? `\`${id}\`` : `<#${id}>`;
 }
 
 function splitIntoChunks(header, body, footer, maxLen = 1750) {
@@ -149,29 +172,71 @@ function splitIntoChunks(header, body, footer, maxLen = 1750) {
     return [single];
   }
 
-  // Split body into lines/bullets
-  const lines = body.split(/\r?\n/);
-  const chunks = [];
-  let current = '';
+  // Break any oversized lines exceeding the safety threshold
+  const lineLimit = Math.max(100, maxLen - header.length - footer.length - 120);
+  const rawLines = body.split(/\r?\n/);
+  const normalizedLines = [];
 
-  for (const line of lines) {
-    const projected = `${header}\n\n${current ? current + '\n' + line : line}\n\n${footer}`;
-    if (projected.length > maxLen && current) {
-      chunks.push(current.trim());
-      current = line;
+  for (const line of rawLines) {
+    if (line.length <= lineLimit) {
+      normalizedLines.push(line);
     } else {
-      current = current ? `${current}\n${line}` : line;
+      let rem = line;
+      while (rem.length > lineLimit) {
+        let splitIdx = rem.lastIndexOf(' ', lineLimit);
+        if (splitIdx <= 0) splitIdx = lineLimit;
+        normalizedLines.push(rem.slice(0, splitIdx));
+        rem = rem.slice(splitIdx).trimStart();
+      }
+      if (rem) normalizedLines.push(rem);
     }
   }
-  if (current.trim()) {
-    chunks.push(current.trim());
+
+  const chunks = [];
+  let currentLines = [];
+  let currentLen = 0;
+  let inCodeBlock = false;
+  let currentCodeFence = '```';
+
+  for (const line of normalizedLines) {
+    const fenceMatch = line.match(/^(\s*)(`{3,})/);
+    const lineLen = line.length + 1;
+    const projectedLen = header.length + currentLen + lineLen + footer.length + 50;
+
+    if (projectedLen > maxLen && currentLines.length > 0) {
+      let chunkText = currentLines.join('\n');
+      if (inCodeBlock) {
+        chunkText += '\n' + currentCodeFence;
+      }
+      chunks.push(chunkText.trim());
+
+      currentLines = [];
+      currentLen = 0;
+      if (inCodeBlock) {
+        currentLines.push(currentCodeFence);
+        currentLen += currentCodeFence.length + 1;
+      }
+    }
+
+    if (fenceMatch) {
+      inCodeBlock = !inCodeBlock;
+      currentCodeFence = fenceMatch[2];
+    }
+
+    currentLines.push(line);
+    currentLen += lineLen;
+  }
+
+  if (currentLines.length > 0) {
+    let chunkText = currentLines.join('\n');
+    if (inCodeBlock) {
+      chunkText += '\n' + currentCodeFence;
+    }
+    chunks.push(chunkText.trim());
   }
 
   if (chunks.length <= 1) {
-    // If lines alone couldn't be split (e.g. single massive paragraph), truncate gracefully
-    const maxBodyLen = Math.max(100, maxLen - header.length - footer.length - 100);
-    const truncatedBody = `${body.slice(0, maxBodyLen)}...\n\n*(Truncated for Discord 2,000 character limit. See full notes in link below)*`;
-    return [`${header}\n\n${truncatedBody}\n\n${footer}`];
+    return [single];
   }
 
   return chunks.map((c, i) => {
@@ -244,19 +309,19 @@ async function main() {
 
   if (options.file) {
     const parsed = parseReleasesDoc(options.file, options.tag);
-    releaseTag = parsed.tag;
-    releaseTitle = parsed.title;
-    releaseBody = parsed.body;
+    releaseTag = options.tag || parsed.tag;
+    releaseTitle = options.title || parsed.title;
+    releaseBody = options.body || parsed.body;
     anchor = parsed.anchor;
   } else if (options.fromGhRelease) {
     const parsed = fetchGitHubRelease(options.tag);
-    releaseTag = parsed.tag;
-    releaseTitle = parsed.title;
-    releaseBody = parsed.body;
-    releaseUrl = parsed.url;
+    releaseTag = options.tag || parsed.tag;
+    releaseTitle = options.title || parsed.title;
+    releaseBody = options.body || parsed.body;
+    releaseUrl = options.url || parsed.url;
   } else if (options.bodyFile) {
     if (fs.existsSync(options.bodyFile)) {
-      releaseBody = fs.readFileSync(options.bodyFile, 'utf8').trim();
+      releaseBody = options.body || fs.readFileSync(options.bodyFile, 'utf8').trim();
     }
   }
 
@@ -279,7 +344,7 @@ async function main() {
     '---',
     `📦 **Full Release Notes & Downloads:** ${releaseUrl}`
   ];
-  if (options.docsUrl && options.docsUrl !== releaseUrl) {
+  if (options.docsUrl && options.docsUrl !== releaseUrl && !releaseUrl.startsWith(`${options.docsUrl}#`)) {
     footerLines.push(`📖 **Documentation:** ${options.docsUrl}`);
   }
   footerLines.push(`🛠️ *Questions or bugs? Drop a post in* ${feedbackChannel}!`);
@@ -312,13 +377,12 @@ async function main() {
       console.log(`Sending copy block to Discord...`);
       await sendWebhookMessage(webhookUrl, copyBlock);
 
-      // Brief pause so Discord receives and displays them in exact order
-      await new Promise(r => setTimeout(r, 600));
+      await new Promise(r => setTimeout(r, 800));
 
       console.log(`Sending live preview to Discord...`);
       await sendWebhookMessage(webhookUrl, chunk);
 
-      await new Promise(r => setTimeout(r, 600));
+      await new Promise(r => setTimeout(r, 800));
     }
   }
 
@@ -327,6 +391,6 @@ async function main() {
 
 main().catch(err => {
   console.error('\n❌ Fatal Error in send-discord-draft:');
-  console.error(err.message || err);
+  console.error(err.stack || err.message || err);
   process.exit(1);
 });
