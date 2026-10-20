@@ -1,0 +1,105 @@
+name: 'FlexVault Discord Release Staging'
+description: 'Formats and stages release announcements to Discord #release-staging with a 1-click copy box and live preview'
+author: 'FlexVault'
+
+inputs:
+  webhook-url:
+    description: 'Discord Webhook URL for #release-staging'
+    required: true
+  from-gh-release:
+    description: 'Fetch release title and body directly from GitHub Release for this tag (leave empty or set tag)'
+    required: false
+    default: ''
+  file:
+    description: 'Path to markdown release notes file (e.g. docs/reference/releases.md)'
+    required: false
+    default: ''
+  tag:
+    description: 'Release tag (e.g. v0.11.2)'
+    required: false
+    default: ''
+  title:
+    description: 'Custom release title'
+    required: false
+    default: ''
+  body:
+    description: 'Custom release body'
+    required: false
+    default: ''
+  body-file:
+    description: 'Path to file containing release body'
+    required: false
+    default: ''
+  url:
+    description: 'Release URL'
+    required: false
+    default: ''
+  docs-url:
+    description: 'Documentation URL'
+    required: false
+    default: 'https://docs.fxv.dev/reference/releases'
+  product-name:
+    description: 'Product name'
+    required: false
+    default: 'FlexVault'
+  destination-channel:
+    description: 'Target channel name displayed in copy instructions'
+    required: false
+    default: '#releases'
+  feedback-channel-id:
+    description: 'Discord channel ID for questions/feedback'
+    required: false
+    default: '1547328671335846068'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Run Discord Staging Script
+      shell: bash
+      env:
+        DISCORD_STAGING_WEBHOOK: ${{ inputs.webhook-url }}
+        DISCORD_FEEDBACK_CHANNEL_ID: ${{ inputs.feedback-channel-id }}
+        INPUT_FROM_GH: ${{ inputs.from-gh-release }}
+        INPUT_FILE: ${{ inputs.file }}
+        INPUT_TAG: ${{ inputs.tag }}
+        INPUT_TITLE: ${{ inputs.title }}
+        INPUT_BODY: ${{ inputs.body }}
+        INPUT_BODY_FILE: ${{ inputs.body-file }}
+        INPUT_URL: ${{ inputs.url }}
+        INPUT_DOCS_URL: ${{ inputs.docs-url }}
+        INPUT_PRODUCT_NAME: ${{ inputs.product-name }}
+        INPUT_DESTINATION_CHANNEL: ${{ inputs.destination-channel }}
+      run: |
+        ARGS=()
+        if [ -n "$INPUT_FILE" ]; then
+          ARGS+=(--file "$INPUT_FILE")
+        fi
+        if [ -n "$INPUT_FROM_GH" ]; then
+          ARGS+=(--from-gh-release "$INPUT_FROM_GH")
+        fi
+        if [ -n "$INPUT_TAG" ]; then
+          ARGS+=(--tag "$INPUT_TAG")
+        fi
+        if [ -n "$INPUT_TITLE" ]; then
+          ARGS+=(--title "$INPUT_TITLE")
+        fi
+        if [ -n "$INPUT_BODY" ]; then
+          ARGS+=(--body "$INPUT_BODY")
+        fi
+        if [ -n "$INPUT_BODY_FILE" ]; then
+          ARGS+=(--body-file "$INPUT_BODY_FILE")
+        fi
+        if [ -n "$INPUT_URL" ]; then
+          ARGS+=(--url "$INPUT_URL")
+        fi
+        if [ -n "$INPUT_DOCS_URL" ]; then
+          ARGS+=(--docs-url "$INPUT_DOCS_URL")
+        fi
+        if [ -n "$INPUT_PRODUCT_NAME" ]; then
+          ARGS+=(--product-name "$INPUT_PRODUCT_NAME")
+        fi
+        if [ -n "$INPUT_DESTINATION_CHANNEL" ]; then
+          ARGS+=(--destination-channel "$INPUT_DESTINATION_CHANNEL")
+        fi
+
+        node "${{ github.action_path }}/send-discord-draft.js" "${ARGS[@]}"
